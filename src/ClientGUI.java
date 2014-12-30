@@ -1,9 +1,15 @@
+import java.awt.Color;
 import java.awt.Container;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -12,68 +18,85 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
-public class ClientGUI extends JFrame implements ActionListener {
+import org.json.JSONException;
+import org.json.JSONObject;
+
+public class ClientGUI extends JFrame implements ActionListener, NoteMessage {
 
 	private static final long serialVersionUID = 1L;
 	// login area
 	private JButton btnLogin;
 	private JTextField tfIP;
 	public JLabel labelLogin;
-	public boolean loginState;
+
 	// send area
 	private JTextField tfDestIP;
 	private JButton btnFile;
 	private JButton btnSend;
 	private JButton btnSendPause;
 	private JButton btnSendCancel;
-	public JLabel taSendInfo;
+	public static JLabel taSendInfo;
 	// receive area
 	public JLabel taRecvRequest;
 	private JButton btnRecv;
 	private JButton btnRecvDeny;
 	private JButton btnRecvPause;
 	private JButton btnRecvCancel;
-	public JLabel taRecvInfo;
+	public static JLabel taRecvInfo;
 
-	// 共享变量
+	// public info area
+	public static JTextArea printArea;
+
+	// 临时变量，与发送接收有关的配置信息
 	private String localIP = "";
 	private String destIP;
 	private String sendFilePath = "";
+	private String recvFilePath = "F:/recv/";
+
+	private Socket socket;
 	private DataInputStream dis;
 	private DataOutputStream dos;
 
-	private SendHelper sendHelper;
+	public static SendHelper sendHelper;
 	private RecvHelper recvHelper;
-	private SocketHelper socketHelper;
-	
+	public List<JSONObject> recvObjects;
+	public List<JSONObject> sendObjects;
+	public List<SendFileThread> sendThreads;
+	public List<RecvFileThread> recvThreads;
+	// 接收第一次请求还是二次请求的标志
+	public static int recvState = 0;
+
 	public ClientGUI() {
 		initComponents();
+		initSocket();
+		initHelper();
 	}
 
 	private void initComponents() {
 		tfIP = new JTextField(10);
-		btnLogin = new JButton("注册");
+		btnLogin = new JButton("Login");
 		labelLogin = new JLabel();
 
 		tfDestIP = new JTextField(10);
-		btnFile = new JButton("选择文件");
-		btnSend = new JButton("发送");
-		btnSendPause = new JButton("暂停");
-		btnSendCancel = new JButton("取消");
+		btnFile = new JButton("Open");
+		btnSend = new JButton("Send");
+		btnSendPause = new JButton("Pause");
+		btnSendCancel = new JButton("继续发送");
 		taSendInfo = new JLabel("正在发送：");
 
-		taRecvRequest = new JLabel("请求：");
+		taRecvRequest = new JLabel("收到文件请求：");
 		taRecvInfo = new JLabel("正在接收：");
-		btnRecv = new JButton("接收");
-		btnRecvDeny = new JButton("拒绝");
-		btnRecvPause = new JButton("暂停");
-		btnRecvCancel = new JButton("取消");
+		btnRecv = new JButton("Receive");
+		btnRecvDeny = new JButton("Refuse");
+		btnRecvPause = new JButton("Pause");
+		btnRecvCancel = new JButton("继续接收");
 
 		setTitle("fuckTCP");
 		setDefaultCloseOperation(EXIT_ON_CLOSE);
-		setBounds(100, 100, 1000, 600);
+		setBounds(100, 100, 1200, 600);
 		setLayout(null);
 		setVisible(true);
 
@@ -83,7 +106,7 @@ public class ClientGUI extends JFrame implements ActionListener {
 		JPanel recvArea = new JPanel();
 
 		localArea.setBounds(50, 20, 900, 80);
-		localArea.setBorder(BorderFactory.createTitledBorder("本机信息"));
+		localArea.setBorder(BorderFactory.createTitledBorder("Local Area"));
 		localArea.setLayout(null);
 		localArea.add(tfIP);
 		localArea.add(btnLogin);
@@ -93,7 +116,7 @@ public class ClientGUI extends JFrame implements ActionListener {
 		labelLogin.setBounds(350, 30, 100, 30);
 
 		sendArea.setBounds(50, 120, 900, 200);
-		sendArea.setBorder(BorderFactory.createTitledBorder("发送区"));
+		sendArea.setBorder(BorderFactory.createTitledBorder("Send Area"));
 		sendArea.setLayout(null);
 		sendArea.add(tfDestIP);
 		sendArea.add(btnSend);
@@ -109,7 +132,7 @@ public class ClientGUI extends JFrame implements ActionListener {
 		btnSendCancel.setBounds(720, 80, 100, 30);
 
 		recvArea.setBounds(50, 340, 900, 200);
-		recvArea.setBorder(BorderFactory.createTitledBorder("接收区"));
+		recvArea.setBorder(BorderFactory.createTitledBorder("Receive Area"));
 		recvArea.setLayout(null);
 		recvArea.add(taRecvRequest);
 		recvArea.add(taRecvInfo);
@@ -128,6 +151,11 @@ public class ClientGUI extends JFrame implements ActionListener {
 		c.add(sendArea);
 		c.add(recvArea);
 
+		printArea = new JTextArea();
+		printArea.setBounds(950, 20, 180, 500);
+		printArea.setBackground(Color.gray);
+		c.add(printArea);
+
 		btnLogin.addActionListener(this);
 		btnFile.addActionListener(this);
 		btnSend.addActionListener(this);
@@ -144,14 +172,15 @@ public class ClientGUI extends JFrame implements ActionListener {
 	}
 
 	private void initHelper() {
-		socketHelper = new SocketHelper(this);
-		dis = socketHelper.getDIS();
-		dos = socketHelper.getDOS();
-		
-		sendHelper = new SendHelper(this);
+		sendHelper = new SendHelper(dos);
 		recvHelper = new RecvHelper(this);
+
+		recvObjects = new ArrayList<JSONObject>();
+		sendObjects = new ArrayList<JSONObject>();
+		sendThreads = new ArrayList<SendFileThread>();
+		recvThreads = new ArrayList<RecvFileThread>();
 	}
-	
+
 	@Override
 	public void actionPerformed(ActionEvent e) {
 		// TODO Auto-generated method stub
@@ -161,18 +190,18 @@ public class ClientGUI extends JFrame implements ActionListener {
 			if (localIP.isEmpty()) {
 				JOptionPane.showMessageDialog(this, "请输入本机IP");
 			} else {
-				initHelper();
-				socketHelper.sendLogin();
-				new Thread(new ClientThread(socketHelper, sendHelper, recvHelper)).start();
+				sendHelper.sendLogin(localIP);
+				new Thread(new NoteThread(dis, this)).start();
 			}
 		} else if (source == btnFile) {
 			JFileChooser chooser = new JFileChooser("F:/");
 			chooser.setDialogTitle("打开");
 			chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
-			if(chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+			if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
 				File sendFile = chooser.getSelectedFile();
 				setSendFilePath(sendFile.getAbsolutePath());
-				taSendInfo.setText(sendFilePath + " " + sendFile.length() / 1024 + "kb");
+				taSendInfo.setText(sendFilePath + " " + sendFile.length()
+						/ 1024 + "kb");
 			}
 		} else if (source == btnSend) {
 			setDestIP(tfDestIP.getText());
@@ -181,29 +210,47 @@ public class ClientGUI extends JFrame implements ActionListener {
 			} else if (sendFilePath.isEmpty()) {
 				JOptionPane.showMessageDialog(this, "请选择要发送的文件");
 			} else {
-				sendHelper.setSendInfo(new SendInfo(localIP, destIP, sendFilePath));
-				sendHelper.sendRequest();
+				sendHelper.sendRequest(addSendConfigInfo());
 			}
 		} else if (source == btnSendPause) {
-
+			sendThreads.get(0).interupt();
 		} else if (source == btnSendCancel) {
-
+			// 暂时当做继续传送的按钮
+			// new Thread(sendThreads.get(0)).start();
+			sendHelper.sendReqSend2(sendObjects.get(0));
 		} else if (source == btnRecv) {
-			recvHelper.sendResponse(true);
-			recvHelper.createFile();
+			// 获取到当前文件选项对应的配置信息
+			
+			if (recvState == 1) {
+				//请求继续发送
+				JSONObject object = recvObjects.get(0);
+				sendHelper.sendRespSend2(object, true);
+			}else if (recvState == 2) {
+				//请求继续接收
+				JSONObject object = sendObjects.get(0);
+				sendHelper.sendRespRecv2(object, true);
+			} else {
+				//第一次请求发送
+				JSONObject object = recvObjects.get(0);
+				object = setRecvConfigInfo(object);
+				recvObjects.set(0, object);
+				sendHelper.sendResponse(object, true);
+			}
+
 		} else if (source == btnRecvDeny) {
-			recvHelper.sendResponse(false);
+			sendHelper.sendResponse(recvObjects.get(0), false);
 		} else if (source == btnRecvPause) {
-			
+			sendHelper.sendInterupt(recvObjects.get(0));
 		} else if (source == btnRecvCancel) {
-			
-		}	
+			// 暂时当做请求继续接收的按钮
+			sendHelper.sendReqRecv2(recvObjects.get(0));
+		}
 	}
 
 	private void setLocalIP(String ip) {
 		localIP = ip;
 	}
-	
+
 	private void setSendFilePath(String path) {
 		sendFilePath = path;
 	}
@@ -211,16 +258,66 @@ public class ClientGUI extends JFrame implements ActionListener {
 	private void setDestIP(String ip) {
 		destIP = ip;
 	}
-	
-	public DataInputStream getDIS() {
-		return dis;
+
+	public void setRecvFilePath(String name) {
+		recvFilePath += name;
 	}
-	
-	public DataOutputStream getDOS() {
-		return dos;
-	}
-	
+
 	public String getLocalIP() {
 		return localIP;
 	}
+
+	public String getSendFilePath() {
+		return sendFilePath;
+	}
+
+	private void initSocket() {
+		try {
+			socket = new Socket(Constants.HOST_NAME, Constants.PORT_NUM);
+			dis = new DataInputStream(new BufferedInputStream(
+					socket.getInputStream()));
+			dos = new DataOutputStream(socket.getOutputStream());
+			System.out.println("socket连接成功");
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			System.out.println("socket连接失败");
+		}
+	}
+
+	private JSONObject addSendConfigInfo() {
+		JSONObject sendObject = new JSONObject();
+		try {
+			sendObject.put(Constants.SRC_IP, localIP);
+			sendObject.put(Constants.DEST_IP, destIP);
+			sendObject.put(Constants.SEND_PATH, sendFilePath);
+
+			File file = new File(sendFilePath);
+			sendObject.put(Constants.FILE_NAME, file.getName());
+			sendObject.put(Constants.FILE_LEN, file.length());
+
+			sendObjects.add(sendObject);
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return sendObject;
+	}
+
+	private JSONObject setRecvConfigInfo(JSONObject object) {
+		try {
+			object.put(Constants.RECV_PATH, recvFilePath);
+			
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return object;
+	}
+
+	@Override
+	public void handleMessage(String msg) {
+		// TODO Auto-generated method stub
+		recvHelper.handleMessage(msg);
+	}
+
 }

@@ -1,102 +1,210 @@
-import java.io.BufferedInputStream;
-import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class SendHelper {
 
-	private String localIP;
-	private String destIP;
-	private String sendFilePath = "";
-	private String sendFileName;
-	private long sendFileLen;
-
-	private DataInputStream dis;
 	private DataOutputStream dos;
-	private ClientGUI client;
 
-	public SendHelper(ClientGUI client) {
-		this.client = client;
-		dis = client.getDIS();
-		dos = client.getDOS();
+	// private ClientGUI client;
+
+	public SendHelper(DataOutputStream dos) {
+		this.dos = dos;
 	}
 
-	public void setSendInfo(SendInfo sendInfo) {
-		localIP = sendInfo.getSrcIP();
-		destIP = sendInfo.getDestIP();
-		sendFilePath = sendInfo.getSendFilePath();
-
-		File file = new File(sendFilePath);
-		sendFileName = file.getName();
-		sendFileLen = file.length();
+	public void sendLogin(String localIP) {
+		System.out.println(localIP + " 正在发送登陆请求");
+		ClientGUI.printArea.append("正在发送登陆请求 \n");
+		try {
+			JSONObject object = new JSONObject();
+			object.put(Constants.TYPE, Constants.TYPE_LOGIN);
+			object.put(Constants.SRC_IP, localIP);
+			dos.writeUTF(object.toString());
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (JSONException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
 	}
 
-	public void sendRequest() {
+	// 发送方请求发送文件
+	public void sendRequest(JSONObject object) {
 		System.out.println("正在发送文件请求");
+		ClientGUI.printArea.append("正在发送文件请求 \n");
 		try {
-			dos.writeByte(Constants.TYPE_REQUEST);
-			dos.writeUTF(localIP); // 源地址
-			dos.writeUTF(destIP); // 目的地址
-
-			dos.writeUTF(sendFileName); // 文件名
-			dos.writeLong(sendFileLen); // 文件大小
-		} catch (IOException e) {
+			object.put(Constants.TYPE, Constants.TYPE_REQUEST);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
 			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
 			e.printStackTrace();
 		}
 	}
 
-	public void recvResponse() {
-		System.out.println("正在接收回应");
-		try {
-			String srcIP = dis.readUTF();
-			dis.readUTF(); // destIP = localIP;
-			boolean response = dis.readBoolean();
+	// 接收方发送回应
+	public void sendResponse(JSONObject object, boolean response) {
+		System.out.println("正在发送回应");
+		ClientGUI.printArea.append("正在发送回应 \n");
 
-			if (srcIP.equals(destIP) && response) {
-				sendFile();
+		try {
+			if (response) {
+				int[] port = PortHelper.getAvailablePort(object
+						.getString(Constants.SRC_IP));
+				object.put(Constants.PORT, port[0]);
+				object.put(Constants.BREAKPOINT, 0);
+				object.put(Constants.COMPLETE, 0);
+
+				// 如果选中端口处于关闭状态，则开新线程打开端口
+				if (port[1] == 0)
+					new Thread(new FilePortThread(port[0])).start();
 			}
-		} catch (IOException e) {
+
+			object.put(Constants.TYPE, Constants.TYPE_RESPONSE);
+			object.put(Constants.RESPONSE, response);
+			dos.writeUTF(object.toString());
+
+		} catch (JSONException e) {
 			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
 			e.printStackTrace();
 		}
 	}
 
-	public void sendFile() {
-		System.out.println("正在发送文件");
-		DataInputStream fileIn = null;
+	// 接收方请求中断文件传送
+	public void sendInterupt(JSONObject object) {
+
+		ClientGUI.printArea.append("正在发送中断接收请求 \n");
 		try {
-			dos.writeByte(Constants.TYPE_FILE);
-
-			fileIn = new DataInputStream(new BufferedInputStream(
-					new FileInputStream(sendFilePath)));
-			byte[] buffer = new byte[1024 * 100];
-			int hasRead = 0;
-			long len = 0L;
-			while ((hasRead = fileIn.read(buffer)) > 0) {
-				dos.write(buffer, 0, hasRead);
-				len += hasRead;
-				client.taSendInfo.setText(sendFileName + "   " + sendFileLen
-						/ 1024 + "kb   " + len * 100 / sendFileLen + "%");
-			}
-
-		} catch (IOException e) {
+			object.put(Constants.TYPE, Constants.TYPE_INTERUPT);
+			dos.writeUTF(object.toString());
+			System.out.println("正在发送中断接收请求");
+		} catch (JSONException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
-		} finally {
-			if (fileIn != null) {
-				try {
-					dos.flush();
-					dos.close();
-					fileIn.close();
-					System.out.println("文件传输完成！");
-				} catch (IOException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 接收文件中断，向服务器发送断点信息
+	public void sendBreakpoint(JSONObject object, long breakpoint) {
+		System.out.println("正在向服务器发送断点信息");
+		ClientGUI.printArea.append("正在向服务器发送断点信息\n");
+		try {
+			object.put(Constants.TYPE, Constants.TYPE_BREAKPOINT);
+			object.put(Constants.BREAKPOINT, breakpoint);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 接收方完成文件接收，向服务器发送完成信号
+	public void sendComplete(JSONObject object) {
+		System.out.println("正在向服务器报告发送文件接收完成信息");
+		ClientGUI.printArea.append("正在向服务器报告发送文件接收完成信息\n");
+		try {
+			object.put(Constants.TYPE, Constants.TYPE_COMPLETE);
+			object.put(Constants.COMPLETE, 1);
+			object.put(Constants.BREAKPOINT, 0);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 发送方在中断后请求继续发送文件
+	public void sendReqSend2(JSONObject object) {
+		System.out.println("正在请求继续发送文件");
+		ClientGUI.printArea.append("正在请求继续发送文件\n");
+		try {
+			object.put(Constants.TYPE, Constants.TYPE_REQSEND2);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 接收方回复发送方关于继续发送文件请求
+	public void sendRespSend2(JSONObject object, boolean response) {
+		System.out.println("正在发送继续传输文件回应");
+		ClientGUI.printArea.append("正在发送关于继续发送文件请求的回应\n");
+		try {
+			if (response) {
+				int[] port = PortHelper.getAvailablePort(object
+						.getString(Constants.SRC_IP));
+				object.put(Constants.PORT, port[0]);
+				object.put(Constants.BREAKPOINT, 0);
+
+				// 如果选中端口处于关闭状态，则开新线程打开端口
+				if (port[1] == 0)
+					new Thread(new FilePortThread(port[0])).start();
 			}
+
+			object.put(Constants.TYPE, Constants.TYPE_RESPSEND2);
+			object.put(Constants.RESPONSE, response);
+			dos.writeUTF(object.toString());
+
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 接收方在中断后请求继续接收文件
+	public void sendReqRecv2(JSONObject object) {
+		System.out.println("正在请求继续接收文件");
+		ClientGUI.printArea.append("正在请求继续接收文件\n");
+		try {
+			object.put(Constants.TYPE, Constants.TYPE_REQRECV2);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+
+	// 发送方回复接收方关于继续接收文件的请求
+	public void sendRespRecv2(JSONObject object, boolean response) {
+		System.out.println("正在发送请求继续接收文件的回复");
+		ClientGUI.printArea.append("正在发送请求继续接收文件的回复\n");
+		try {
+			object.put(Constants.TYPE, Constants.TYPE_RESPRECV2);
+			object.put(Constants.RESPONSE, response);
+			dos.writeUTF(object.toString());
+		} catch (JSONException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO: handle exception
+			e.printStackTrace();
 		}
 	}
 
