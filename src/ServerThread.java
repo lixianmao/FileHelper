@@ -4,29 +4,27 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
+/**
+ * 监听服务器默认端口的服务线程
+ * 
+ * @author Administrator
+ *
+ */
 public class ServerThread implements Runnable {
 
-	// 消息类型
-	private final byte TYPE_LOGIN = 0x0;
-	private final byte TYPE_LOGOUT = 0x1;
-	private final byte TYPE_REQUEST = 0x2;
-	private final byte TYPE_RESPONSE = 0x3;
-	private final byte TYPE_INTERUPT = 0x4;
-	private final byte TYPE_FILE = 0x5;
-
-	private Socket socket;
-	private DataOutputStream destDos;
-	private DataInputStream srcDis;
-	private DataOutputStream srcDos;
-	private byte type = 0x0;
-	private boolean threadFlag = true; // 线程运行标志
+	private DataOutputStream destDos; // 发往目的主机的输出流
+	private DataInputStream srcDis; // 来自源主机的输入流
+	private DataOutputStream srcDos; // 发往源主机的输出流
+	private boolean runFlag = true; // 线程运行标志
 
 	public ServerThread(Socket socket) {
-		this.socket = socket;
-		initStream();
+		initStream(socket);
 	}
 
-	private void initStream() {
+	private void initStream(Socket socket) {
 		try {
 			srcDis = new DataInputStream(new BufferedInputStream(
 					socket.getInputStream()));
@@ -38,96 +36,107 @@ public class ServerThread implements Runnable {
 		}
 	}
 
-	private boolean recvMessage() {
-		String srcIp = "";
-		String destIp = "";
-		System.out.println(this);
+	private void handleMessage() {
+		String senderIP = "";
+		String receiverIP = "";
 		try {
-			type = srcDis.readByte();
+			String msg = srcDis.readUTF();
+			JSONObject object = new JSONObject(msg);
+			int type = object.getInt(Constants.TYPE);
+			System.out.println(type);
 			switch (type) {
-			case TYPE_LOGIN:
-				srcIp = srcDis.readUTF();
-				System.out.println("login " + srcIp);
-				srcDos.writeByte(TYPE_LOGIN);
-				if (Server.dosMap.containsKey(srcIp)) {
-					srcDos.writeBoolean(false);
+			case Constants.TYPE_LOGIN:
+				senderIP = object.getString(Constants.SRC_IP);
+				System.out.println("ip: " + senderIP + " dos: " + srcDos);
+				if (Server.dosMap.containsKey(senderIP)) {
+					object.put(Constants.RESPONSE, false);
 				} else {
-					srcDos.writeBoolean(true);
-					Server.dosMap.put(srcIp, srcDos);
-					System.out.println("ip: " + srcIp + " dos: " + srcDos);
+					object.put(Constants.RESPONSE, true);
+					Server.dosMap.put(senderIP, srcDos);
 				}
+				srcDos.writeUTF(object.toString());
 				break;
-			case TYPE_REQUEST:
-				srcIp = srcDis.readUTF();
-				destIp = srcDis.readUTF();
-				String fileName = srcDis.readUTF();
-				long fileLen = srcDis.readLong();
-				System.out.println("request: " + srcIp + " " + destIp + " "
-						+ fileName + " " + fileLen);
-
-				if (Server.dosMap.containsKey(destIp)) {
-					destDos = Server.dosMap.get(destIp);
-					destDos.writeByte(TYPE_REQUEST);
-					destDos.writeUTF(srcIp);
-					destDos.writeUTF(destIp);
-					destDos.writeUTF(fileName);
-					destDos.writeLong(fileLen);
+			case Constants.TYPE_REQUEST:
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				if (Server.dosMap.containsKey(receiverIP)) {
+					destDos = Server.dosMap.get(receiverIP);
+					destDos.writeUTF(msg);
 				} else {
-					System.out.println("目标客户不存在!");
+					System.out.println(receiverIP + ": 目标客户不存在!");
+					// TODO
+				}
+				break;
+			case Constants.TYPE_RESPONSE:
+				// 将接收端的回应转发给发送端
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				destDos = Server.dosMap.get(senderIP);
+				destDos.writeUTF(msg);
+
+				if (object.getBoolean(Constants.RESPONSE)) {
+					// 向数据库中添加文件记录
+					new DBHelper().insert(object);
+				}
+				break;
+			case Constants.TYPE_BREAKPOINT:
+			case Constants.TYPE_COMPLETE:
+				new DBHelper().update(object);
+				break;
+			case Constants.TYPE_REQSEND2:
+			case Constants.TYPE_RESPRECV2:
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				destDos = Server.dosMap.get(receiverIP);
+				destDos.writeUTF(msg);
+				break;
+			case Constants.TYPE_RESPSEND2:
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				if (object.getBoolean(Constants.RESPONSE)) {
+					long breakpoint = new DBHelper().select(object);
+					object.put(Constants.BREAKPOINT, breakpoint);
 				}
 
+				destDos = Server.dosMap.get(senderIP);
+				destDos.writeUTF(object.toString());
 				break;
-			case TYPE_RESPONSE:
-				srcIp = srcDis.readUTF();
-				destIp = srcDis.readUTF();
-				boolean response = srcDis.readBoolean();
-				System.out.println("response: " + srcIp + " " + destIp + " "
-						+ response);
-
-				destDos = Server.dosMap.get(destIp);
-				destDos.writeByte(TYPE_RESPONSE);
-				destDos.writeUTF(srcIp);
-				destDos.writeUTF(destIp);
-				destDos.writeBoolean(response);
-				System.out.println(destDos + "正在转发response");
-				break;
-			case TYPE_FILE: // 转发数据流
-				System.out.println("file");
-				destDos.writeByte(TYPE_FILE);
-				byte[] buffer = new byte[1024 * 1024];
-				int hasRead = 0;
-				while ((hasRead = srcDis.read(buffer)) > 0) {
-					destDos.write(buffer, 0, hasRead);
-				}
-				destDos.flush();
-				destDos.close();
-				break;
-			case TYPE_INTERUPT:
-				break;
-			case TYPE_LOGOUT:
+			case Constants.TYPE_REQRECV2:
+			case Constants.TYPE_INTERUPT:
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				destDos = Server.dosMap.get(senderIP);
+				destDos.writeUTF(msg);
 				break;
 			default:
+
+				senderIP = object.getString(Constants.SRC_IP);
+				receiverIP = object.getString(Constants.DEST_IP);
+				destDos = Server.dosMap.get(senderIP);
+				destDos.writeUTF(msg);
 				break;
 			}
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
-			System.out.println("文件成功转发");
 			// e.printStackTrace();
 			stopThread();
-			return false;
+		} catch (JSONException e) {
+			// TODO: handle exception
+			e.printStackTrace();
 		}
-		return true;
 	}
 
 	@Override
 	public void run() {
 		// TODO Auto-generated method stub
-		while (threadFlag) {
-			recvMessage();
+		System.out.println("ServerThread: " + Thread.currentThread());
+		while (runFlag) {
+			handleMessage();
 		}
 	}
 
-	private void stopThread() {
-		this.threadFlag = false;
+	public void stopThread() {
+		this.runFlag = false;
 	}
+
 }
