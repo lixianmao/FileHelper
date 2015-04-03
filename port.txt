@@ -1,1 +1,1 @@
-[{"port":8000,"state":true,"clients":[]},{"port":8001,"state":false,"clients":[]},{"port":8002,"state":false,"clients":[]},{"port":8003,"state":false,"clients":[]},{"port":8004,"state":false,"clients":[]}]
+[{"clients":["192.168.0.3","192.168.0.5"],"port":15576},{"clients":["192.168.0.3","192.168.0.5"],"port":15577},{"clients":["192.168.0.3"],"port":15578},{"clients":["192.168.0.3"],"port":15579},{"clients":[],"port":15580},{"clients":[],"port":15581},{"clients":[],"port":15582},{"clients":[],"port":15583},{"clients":[],"port":15584},{"clients":[],"port":15585}]

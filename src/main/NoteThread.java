@@ -1,3 +1,6 @@
+package main;
+import helper.NoteMessage;
+
 import java.io.DataInputStream;
 import java.io.IOException;
 

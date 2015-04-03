@@ -1,3 +1,5 @@
+package helper;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
@@ -5,6 +7,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -18,11 +21,12 @@ public class PortHelper {
 			file.createNewFile();
 
 			JSONArray array = new JSONArray();
-			for (int i = 8000; i < 8005; i++) {
+			Random rand = new Random(System.currentTimeMillis());
+			int min = rand.nextInt(10000) + 10000;
+			for (int i = min; i < min + 20; i++) {
 				JSONObject object = new JSONObject();
 				object.put(Constants.PORT, i);
 				object.put(Constants.PORT_CLIENTS, new JSONArray());
-				object.put(Constants.PORT_OPEN, false);
 				array.put(object);
 			}
 
@@ -38,14 +42,13 @@ public class PortHelper {
 	}
 
 	/**
-	 * 根据请求客户端，查找可用端口进行文件传输 优先返回已经打开的端口
+	 * 根据请求客户端，查找可用端口进行文件传输 
 	 * 
 	 * @param client
 	 * @return 端口和端口的开关状态
 	 */
-	public static int[] getAvailablePort(String client) {
+	public static int getAvailablePort(String client) {
 		int port = 0;
-		int open = 0;
 
 		File file = new File("port.txt");
 		if (!file.exists() || file.length() == 0) {
@@ -60,16 +63,10 @@ public class PortHelper {
 				JSONArray array = new JSONArray(new String(buf));
 				for (int i = 0; i < array.length(); i++) {
 					JSONObject object = array.getJSONObject(i);
-					JSONArray clients = object
-							.getJSONArray(Constants.PORT_CLIENTS);
+					JSONArray clients = object.getJSONArray(Constants.PORT_CLIENTS);
 					if (!hasClient(clients, client)) {
-						if (object.getBoolean(Constants.PORT_OPEN)) {
-							port = object.getInt(Constants.PORT);
-							open = 1;
-							break;
-						} else if (port == 0) {
-							port = object.getInt(Constants.PORT);
-						}
+						port = object.getInt(Constants.PORT);
+						break;
 					}
 				}
 
@@ -86,9 +83,7 @@ public class PortHelper {
 			}
 
 		}
-		int[] result = { port, open };
-		System.out.println("port " + port + " " + open);
-		return result;
+		return port;
 	}
 
 	// 判断端口已连接的客户端中是否有指定ip的主机
@@ -107,8 +102,6 @@ public class PortHelper {
 
 	// 在端口文件中对指定端口写入发送者和接受者的ip
 	public static void writeClientToPort(int port, String client) {
-		ClientGUI.printArea.append("正在将发送端信息写入端口文件\n");
-
 		File file = new File("port.txt");
 		FileReader reader = null;
 		FileWriter writer = null;
@@ -123,7 +116,6 @@ public class PortHelper {
 
 				JSONObject object = array.getJSONObject(i);
 				if (object.getInt(Constants.PORT) == port) {
-					object.put(Constants.PORT_OPEN, true);
 					object.getJSONArray(Constants.PORT_CLIENTS).put(client);
 					break;
 				}
@@ -152,9 +144,8 @@ public class PortHelper {
 		}
 	}
 
+	/** 从特定端口中将用户信息移除  */
 	public static void removeClientFromPort(int port, String client) {
-		ClientGUI.printArea.append("正在将发送端从端口文件中删除\n");
-
 		File file = new File("port.txt");
 		FileReader reader = null;
 		FileWriter writer = null;
@@ -217,6 +208,4 @@ public class PortHelper {
 		return new JSONArray(list);
 	}
 
-	// 端口线程没有接收文件的子线程时，应该关闭端口线程并写入端口文件中
-	// TODO
 }
